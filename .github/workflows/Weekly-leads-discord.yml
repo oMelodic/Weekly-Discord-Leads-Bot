@@ -35,12 +35,9 @@ jobs:
           one_week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
 
           combined_query = (
-            '"AI output is wrong" OR "AI gave me a bad answer" OR '
-            '"LLM gave inconsistent results" OR "why is my AI answer changing" OR '
-            '"can’t trust GPT response" OR "ChatGPT hallucinated" OR '
-            '"AI not following prompt" OR "LLM output keeps changing" OR '
-            '"AI response format is wrong" OR "AI returns bad JSON" OR '
-            '"how to make AI output reliable" OR "frustrated with AI results"'
+            '"issues with AI output" OR "problems using LLMs" OR '
+            '"AI response inconsistent" OR "how to improve AI accuracy" OR '
+            '"large language model issues" OR "frustrated with AI tools"'
           )
 
           try:
