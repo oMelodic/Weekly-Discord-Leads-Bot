@@ -1,0 +1,162 @@
+# This workflow runs every Monday at 9:00 AM (Chicago time) or manually on demand
+name: Weekly Leads → Discord
+
+on:
+  schedule:
+    - cron: '0 14 * * MON'  # 14:00 UTC = 09:00 America/Chicago
+  workflow_dispatch:
+
+jobs:
+  generate-and-send:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install Python & jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+          pip install --quiet openai requests
+
+      - name: Fetch leads from Exa
+        env:
+          EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
+        run: |
+          pip install exa-py
+          cat << 'EOF' > fetch_exa.py
+          import os, json
+          from urllib.parse import urlparse
+          from datetime import datetime, timedelta
+          from exa_py import Exa
+
+          exa = Exa(os.environ["EXA_API_KEY"])
+          one_week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+          combined_query = (
+            '"AI output is wrong" OR "AI gave me a bad answer" OR '
+            '"LLM gave inconsistent results" OR "why is my AI answer changing" OR '
+            '"can’t trust GPT response" OR "ChatGPT hallucinated" OR '
+            '"AI not following prompt" OR "LLM output keeps changing" OR '
+            '"AI response format is wrong" OR "AI returns bad JSON" OR '
+            '"how to make AI output reliable" OR "frustrated with AI results"'
+          )
+
+          try:
+            search_results = exa.search_and_contents(
+                query=combined_query,
+                start_published_date=one_week_ago,
+                num_results=60,
+                type="auto",
+                text=True,
+                summary=True,
+                livecrawl="always"
+            )
+            all_results = search_results.results
+          except Exception as e:
+              print(f"Error searching: {e}")
+              all_results = []
+
+          seen_urls = set()
+          filtered_results = []
+          for r in all_results:
+              if r.url not in seen_urls:
+                  seen_urls.add(r.url)
+                  filtered_results.append(r)
+
+          leads = []
+          for r in filtered_results:
+              leads.append({
+                  "title": r.title,
+                  "url": r.url,
+                  "author": r.author,
+                  "published_date": r.published_date,
+                  "summary": r.summary,
+              })
+
+          if not leads:
+            raise RuntimeError("No leads were collected from Exa — aborting job.")
+
+          with open("exa_results.json", "w") as f:
+              json.dump(leads, f, indent=2)
+          EOF
+
+          python3 fetch_exa.py
+
+      - name: Generate Leads Report
+        id: generate_report
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          cat << 'EOF' > generate_report.py
+          import os, json, openai
+          from urllib.parse import urlparse
+
+          openai.api_key = os.getenv("OPENAI_API_KEY")
+
+          with open("exa_results.json") as f:
+              results = json.load(f)
+
+          def extract_platform(url):
+              return urlparse(url).netloc.replace("www.", "")
+
+          leads = []
+          for item in results:
+              platform = extract_platform(item['url'])
+              leads.append(
+                  f"**Platform:** {platform}\n"
+                  f"- **Title:** [{item['title']}]({item['url']})\n"
+                  f"- **Author:** {item.get('author', 'unknown')}\n"
+                  f"- **Summary:** {item.get('summary', '')[:400]}\n"
+              )
+          scraped_text = "\n\n".join(leads)
+
+          prompt = f"""You are given real posts found via Exa search.
+
+          Each item includes:
+          - Platform
+          - Title
+          - Author
+          - Summary
+
+          Summarize each lead in Markdown grouped by platform. For each:
+          - Repeat the platform name
+          - Link the title
+          - Include author
+          - Provide a 1–2 sentence summary
+
+          Here is the data:\n\n{scraped_text}
+          """
+
+          response = openai.chat.completions.create(
+              model="gpt-4o-mini",
+              messages=[{"role": "user", "content": prompt}],
+              temperature=0.0
+          )
+
+          report_text = response.choices[0].message.content.strip()
+
+          with open("leads_report.md", "w") as f:
+              f.write(report_text)
+          EOF
+
+          python3 generate_report.py
+
+      - name: Convert Markdown to PDF
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wkhtmltopdf pandoc
+          pandoc leads_report.md -o leads_report.pdf --pdf-engine=wkhtmltopdf --metadata title="Weekly Leads Report"
+
+      - name: Post PDF to Discord
+        if: success()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          CONTENT="Here is this week’s leads report. PDF attached."
+          ESCAPED_CONTENT=$(jq -Rn --arg msg "$CONTENT" '$msg')
+
+          curl -F "payload_json={\"content\":$ESCAPED_CONTENT}" \
+               -F "file=@leads_report.pdf" \
+               "$DISCORD_WEBHOOK_URL"
