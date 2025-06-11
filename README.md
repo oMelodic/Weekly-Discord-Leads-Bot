@@ -44,8 +44,9 @@ Edit the query inside `.github/workflows/ai-leads.yml`:
 
 ```python
 combined_query = (
-  '"AI output is wrong" OR "AI gave me a bad answer" OR '
-  '"LLM gave inconsistent results" OR ...'
+  '"issues with AI output" OR "problems using LLMs" OR '
+  '"AI response inconsistent" OR "how to improve AI accuracy" OR '
+  '"large language model issues" OR "frustrated with AI tools"'
 )
 ```
 
